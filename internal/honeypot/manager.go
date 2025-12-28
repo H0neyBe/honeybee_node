@@ -152,19 +152,6 @@ func (hm *HoneypotManager) InstallPot(cmd *protocol.InstallPot) error {
 	return nil
 }
 
-// parsePort parses a string port number
-func parsePort(s string) (uint16, error) {
-	var port int
-	_, err := fmt.Sscanf(s, "%d", &port)
-	if err != nil {
-		return 0, err
-	}
-	if port < 1 || port > 65535 {
-		return 0, fmt.Errorf("port out of range")
-	}
-	return uint16(port), nil
-}
-
 // PotStoreURL is the official HoneyBee PotStore repository
 const PotStoreURL = "https://github.com/H0neyBe/honeybee_potstore.git"
 
@@ -472,17 +459,19 @@ func (hm *HoneypotManager) setupHonnyPotter(instance *HoneypotInstance, config m
 	}
 
 	// Set default HTTP port if not specified
-	httpPort := uint16(80)
+	httpPort := uint16(8080) // Default to 8080 for HonnyPotter
 	if portStr, ok := config["http_port"]; ok && portStr != "" {
 		if port, err := parsePort(portStr); err == nil {
 			httpPort = port
 		}
 	}
 
+	// Store HTTP port in SSHPort field for HonnyPotter (since it doesn't use SSH)
+	instance.SSHPort = httpPort
+
 	logger.Infof("HonnyPotter setup complete. Pot ID: %s, HTTP Port: %d", potID, httpPort)
 	return nil
 }
-
 
 // parsePort parses a port string to uint16
 func parsePort(portStr string) (uint16, error) {
@@ -646,13 +635,11 @@ func (hm *HoneypotManager) startCowrie(instance *HoneypotInstance) error {
 	logger.Infof("Starting Cowrie honeypot %s", instance.ID)
 
 	// Determine paths based on OS
-	var twistdPath, pythonPath string
+	var twistdPath string
 	if runtime.GOOS == "windows" {
 		twistdPath = filepath.Join(instance.InstallPath, "cowrie-env", "Scripts", "twistd.exe")
-		pythonPath = filepath.Join(instance.InstallPath, "cowrie-env", "Scripts", "python.exe")
 	} else {
 		twistdPath = filepath.Join(instance.InstallPath, "cowrie-env", "bin", "twistd")
-		pythonPath = filepath.Join(instance.InstallPath, "cowrie-env", "bin", "python")
 	}
 
 	// Create context for the process
@@ -666,7 +653,7 @@ func (hm *HoneypotManager) startCowrie(instance *HoneypotInstance) error {
 	// Arguments: twistd -n -l - cowrie
 	// -n = nodaemon (foreground)
 	// -l - = log to stdout
-	cmd := exec.CommandContext(ctx, pythonPath, twistdPath, "-n", "-l", "-", "cowrie")
+	cmd := exec.CommandContext(ctx, twistdPath, "-n", "-l", "-", "cowrie")
 	cmd.Dir = instance.InstallPath
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("PYTHONPATH=%s", srcPath),
@@ -716,8 +703,12 @@ func (hm *HoneypotManager) startHonnyPotter(instance *HoneypotInstance) error {
 		phpCmd = "php.exe"
 	}
 
-	// Default HTTP port (can be overridden via environment or config file)
-	httpPort := "8080"
+	// Get HTTP port from instance (stored during setup)
+	httpPort := uint16(8080) // Default
+	if instance.SSHPort != 0 {
+		// For HonnyPotter, SSHPort field stores the HTTP port
+		httpPort = instance.SSHPort
+	}
 
 	// Get pot ID from instance
 	potID := instance.ID
@@ -738,13 +729,16 @@ func (hm *HoneypotManager) startHonnyPotter(instance *HoneypotInstance) error {
 	// Set environment variables for HoneyBee integration
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("HONEYBEE_POT_ID=%s", potID))
+	env = append(env, fmt.Sprintf("HONEYBEE_EVENT_PORT=%d", hm.listenerPort))
+	env = append(env, fmt.Sprintf("HONEYBEE_HONEYPOT_ID=%s", instance.ID))
+	env = append(env, fmt.Sprintf("HONEYBEE_HONEYPOT_TYPE=%s", instance.Type))
 	env = append(env, "HONEYBEE_ENABLE=true")
 	env = append(env, "HONEYBEE_ENABLE_FILE_LOG=true")
 	env = append(env, fmt.Sprintf("HONEYBEE_LOG_FILE=%s", filepath.Join(instance.InstallPath, "logs", "honnypotter.log")))
 
 	// Start PHP built-in server
-	// php -S 0.0.0.0:8080 -t . standalone.php
-	cmd := exec.CommandContext(ctx, phpCmd, "-S", fmt.Sprintf("0.0.0.0:%s", httpPort), "-t", instance.InstallPath, entryPoint)
+	// php -S 0.0.0.0:8080 standalone.php
+	cmd := exec.CommandContext(ctx, phpCmd, "-S", fmt.Sprintf("0.0.0.0:%d", httpPort), entryPoint)
 	cmd.Dir = instance.InstallPath
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
@@ -757,7 +751,7 @@ func (hm *HoneypotManager) startHonnyPotter(instance *HoneypotInstance) error {
 
 	instance.Process = cmd
 	instance.Status = protocol.PotStatusRunning
-	hm.sendStatusUpdate(instance, fmt.Sprintf("HonnyPotter started on port %s", httpPort))
+	hm.sendStatusUpdate(instance, fmt.Sprintf("HonnyPotter started on port %d", httpPort))
 
 	// Monitor process in background
 	go func() {
@@ -776,7 +770,7 @@ func (hm *HoneypotManager) startHonnyPotter(instance *HoneypotInstance) error {
 		instance.mu.Unlock()
 	}()
 
-	logger.Infof("HonnyPotter honeypot %s started on port %s", instance.ID, httpPort)
+	logger.Infof("HonnyPotter honeypot %s started on HTTP:%d", instance.ID, httpPort)
 	return nil
 }
 
