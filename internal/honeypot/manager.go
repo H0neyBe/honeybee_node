@@ -1005,8 +1005,7 @@ func (hm *HoneypotManager) captureProcessOutput(instance *HoneypotInstance, sour
 		if metadata == nil {
 			metadata = map[string]string{}
 		}
-		metadata["pot_type"] = instance.Type
-		metadata["source"] = source
+		metadata["stream"] = source
 
 		if eventName == "" {
 			eventName = "honeybee.pot.process_log"
@@ -1043,6 +1042,8 @@ func (hm *HoneypotManager) captureProcessOutput(instance *HoneypotInstance, sour
 var (
 	reStdLine          = regexp.MustCompile(`^([^\[]+)\s+\[([^\]]+)\]\s+(.*)$`)
 	reNewConnGeneric   = regexp.MustCompile(`New connection: ([^:]+):(\d+) \(([^:]+):(\d+)\) \[session: ([^\]]+)\]`)
+	reSSHVersion       = regexp.MustCompile(`Remote SSH version: (.+)$`)
+	reHassh            = regexp.MustCompile(`SSH client hassh fingerprint: ([a-f0-9]+)`)
 	reLoginAttemptBin  = regexp.MustCompile(`login attempt \[b'([^']+)'/b'([^']*)'\] failed`)
 	reLoginAttemptText = regexp.MustCompile(`login attempt \[([^/]+)/([^\]]+)\] failed`)
 	reAuthTrying       = regexp.MustCompile(`b'([^']+)' trying auth b'([^']+)'`)
@@ -1067,6 +1068,12 @@ func parseCowrieLogLine(line string) (string, map[string]string) {
 		"timestamp": ts,
 		"system":    system,
 	}
+	if comp := extractComponent(system); comp != "" {
+		metadata["component"] = comp
+	}
+	if level := extractLevel(system); level != "" {
+		metadata["level"] = level
+	}
 
 	// Common patterns across many honeypots
 	if m := reNewConnGeneric.FindStringSubmatch(msg); m != nil {
@@ -1076,6 +1083,18 @@ func parseCowrieLogLine(line string) (string, map[string]string) {
 		metadata["dst_port"] = m[4]
 		metadata["session"] = m[5]
 		return "session.connect", metadata
+	}
+
+	if m := reSSHVersion.FindStringSubmatch(msg); m != nil {
+		metadata["version"] = m[1]
+		metadata["protocol"] = "ssh"
+		return "client.version", metadata
+	}
+
+	if m := reHassh.FindStringSubmatch(msg); m != nil {
+		metadata["hassh"] = m[1]
+		metadata["protocol"] = "ssh"
+		return "client.kex", metadata
 	}
 
 	if m := reLoginAttemptBin.FindStringSubmatch(msg); m != nil {
@@ -1128,6 +1147,35 @@ func parseCowrieLogLine(line string) (string, map[string]string) {
 	}
 
 	return "process.log", metadata
+}
+
+func extractComponent(system string) string {
+	if system == "" || system == "-" {
+		return ""
+	}
+	if idx := strings.Index(system, "#"); idx != -1 {
+		return system[:idx]
+	}
+	if idx := strings.Index(system, ","); idx != -1 {
+		return system[:idx]
+	}
+	return system
+}
+
+func extractLevel(system string) string {
+	if strings.Contains(system, "#debug") {
+		return "debug"
+	}
+	if strings.Contains(system, "#info") {
+		return "info"
+	}
+	if strings.Contains(system, "#warn") || strings.Contains(system, "#warning") {
+		return "warn"
+	}
+	if strings.Contains(system, "#error") {
+		return "error"
+	}
+	return ""
 }
 
 // findHoneypotForEvent tries to determine which honeypot an event belongs to

@@ -594,6 +594,11 @@ func (nc *NodeClient) handleGetInstalledPots() {
 
 // sendPotEvent sends a pot (honeypot) event to the server as a PotLog
 func (nc *NodeClient) sendPotEvent(event *protocol.PotEvent) error {
+	// Skip internal status events from being stored as pot logs
+	if event.Event == "honeybee.pot.status" {
+		return nil
+	}
+
 	// Get the honeypot type from the manager
 	var potType string
 	if nc.honeypotMgr != nil {

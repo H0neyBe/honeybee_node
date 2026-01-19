@@ -449,11 +449,6 @@ func PotEventToPotLog(event *PotEvent, potType string) *PotLog {
 		data[k] = v
 	}
 
-	// Add event ID to data
-	if event.Event != "" {
-		data["event"] = event.Event
-	}
-
 	// Add message to data if present
 	if event.Message != nil {
 		data["message"] = *event.Message
