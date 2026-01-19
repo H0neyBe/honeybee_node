@@ -473,7 +473,15 @@ func (nc *NodeClient) handleInstallPot(cmd *protocol.InstallPot) {
 	if err := nc.honeypotMgr.InstallPot(cmd); err != nil {
 		logger.Errorf("Failed to install pot: %v", err)
 		nc.sendEvent(protocol.NewErrorEvent(fmt.Sprintf("Failed to install pot: %v", err)))
+		return
 	}
+
+	// Send success event
+	message := fmt.Sprintf("Honeypot %s (%s) installed successfully", cmd.PotID, cmd.HoneypotType)
+	if cmd.AutoStart {
+		message += " and will start automatically"
+	}
+	nc.sendEvent(protocol.NewAlarmEvent(message))
 }
 
 // handleStartPot handles starting a pot (honeypot)
@@ -487,7 +495,11 @@ func (nc *NodeClient) handleStartPot(potID string) {
 	if err := nc.honeypotMgr.StartHoneypot(potID); err != nil {
 		logger.Errorf("Failed to start pot: %v", err)
 		nc.sendEvent(protocol.NewErrorEvent(fmt.Sprintf("Failed to start pot: %v", err)))
+		return
 	}
+
+	// Send success event
+	nc.sendEvent(protocol.NewAlarmEvent(fmt.Sprintf("Honeypot %s started successfully", potID)))
 }
 
 // handleStopPot handles stopping a pot (honeypot)
@@ -501,7 +513,11 @@ func (nc *NodeClient) handleStopPot(potID string) {
 	if err := nc.honeypotMgr.StopHoneypot(potID); err != nil {
 		logger.Errorf("Failed to stop pot: %v", err)
 		nc.sendEvent(protocol.NewErrorEvent(fmt.Sprintf("Failed to stop pot: %v", err)))
+		return
 	}
+
+	// Send success event
+	nc.sendEvent(protocol.NewAlarmEvent(fmt.Sprintf("Honeypot %s stopped successfully", potID)))
 }
 
 // handleRestartPot handles restarting a pot (honeypot)
@@ -520,7 +536,11 @@ func (nc *NodeClient) handleRestartPot(potID string) {
 	if err := nc.honeypotMgr.StartHoneypot(potID); err != nil {
 		logger.Errorf("Failed to restart pot: %v", err)
 		nc.sendEvent(protocol.NewErrorEvent(fmt.Sprintf("Failed to restart pot: %v", err)))
+		return
 	}
+
+	// Send success event
+	nc.sendEvent(protocol.NewAlarmEvent(fmt.Sprintf("Honeypot %s restarted successfully", potID)))
 }
 
 // handleGetPotStatus handles getting the status of a pot
