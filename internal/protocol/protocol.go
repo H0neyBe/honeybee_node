@@ -91,10 +91,10 @@ type NodeStatusUpdate struct {
 // Matches the Rust enum serialization: NodeEvent { Started | Stopped | Alarm | Error }
 type NodeEvent struct {
 	// Only ONE of these fields should be set to match Rust enum serialization
-	Started *struct{}          `json:"Started,omitempty"` // Unit variant
-	Stopped *struct{}          `json:"Stopped,omitempty"` // Unit variant
-	Alarm   *AlarmEvent        `json:"Alarm,omitempty"`   // Struct variant
-	Error   *ErrorEvent        `json:"Error,omitempty"`   // Struct variant
+	Started *struct{}   `json:"Started,omitempty"` // Unit variant
+	Stopped *struct{}   `json:"Stopped,omitempty"` // Unit variant
+	Alarm   *AlarmEvent `json:"Alarm,omitempty"`   // Struct variant
+	Error   *ErrorEvent `json:"Error,omitempty"`   // Struct variant
 }
 
 // AlarmEvent represents the Alarm variant payload
@@ -413,12 +413,12 @@ func PotEventToPotLog(event *PotEvent, potType string) *PotLog {
 	for k, v := range event.Metadata {
 		data[k] = v
 	}
-	
+
 	// Add event ID to data
 	if event.Event != "" {
 		data["event"] = event.Event
 	}
-	
+
 	// Add message to data if present
 	if event.Message != nil {
 		data["message"] = *event.Message
@@ -432,11 +432,4 @@ func PotEventToPotLog(event *PotEvent, potType string) *PotLog {
 		Data:      data,
 		Timestamp: time.Unix(int64(event.Timestamp), 0).Format(time.RFC3339),
 	}
-}
-		case bool:
-			event.Metadata[key] = fmt.Sprintf("%v", v)
-		}
-	}
-
-	return event
 }
