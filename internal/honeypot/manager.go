@@ -598,13 +598,25 @@ func (hm *HoneypotManager) startGenericPython(instance *HoneypotInstance) error 
 
 	cmd := exec.CommandContext(ctx, pythonPath, entryPoint)
 	cmd.Dir = instance.InstallPath
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to capture stdout: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to capture stderr: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return fmt.Errorf("failed to start %s: %w", instance.Type, err)
 	}
+
+	go hm.captureProcessOutput(instance, "stdout", stdoutPipe, os.Stdout)
+	go hm.captureProcessOutput(instance, "stderr", stderrPipe, os.Stderr)
 
 	instance.Process = cmd
 	instance.Status = protocol.PotStatusRunning
@@ -658,13 +670,25 @@ func (hm *HoneypotManager) startCowrie(instance *HoneypotInstance) error {
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("PYTHONPATH=%s", srcPath),
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to capture stdout: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to capture stderr: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return fmt.Errorf("failed to start cowrie: %w", err)
 	}
+
+	go hm.captureProcessOutput(instance, "stdout", stdoutPipe, os.Stdout)
+	go hm.captureProcessOutput(instance, "stderr", stderrPipe, os.Stderr)
 
 	instance.Process = cmd
 	instance.Status = protocol.PotStatusRunning
@@ -741,13 +765,25 @@ func (hm *HoneypotManager) startHonnyPotter(instance *HoneypotInstance) error {
 	cmd := exec.CommandContext(ctx, phpCmd, "-S", fmt.Sprintf("0.0.0.0:%d", httpPort), entryPoint)
 	cmd.Dir = instance.InstallPath
 	cmd.Env = env
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to capture stdout: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return fmt.Errorf("failed to capture stderr: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return fmt.Errorf("failed to start HonnyPotter: %w", err)
 	}
+
+	go hm.captureProcessOutput(instance, "stdout", stdoutPipe, os.Stdout)
+	go hm.captureProcessOutput(instance, "stderr", stderrPipe, os.Stderr)
 
 	instance.Process = cmd
 	instance.Status = protocol.PotStatusRunning
@@ -940,6 +976,58 @@ func (hm *HoneypotManager) handleConnection(conn net.Conn) {
 		default:
 			logger.Warn("Event channel full, dropping pot event")
 		}
+	}
+}
+
+// captureProcessOutput reads honeypot process output and forwards it as pot events
+func (hm *HoneypotManager) captureProcessOutput(instance *HoneypotInstance, source string, r io.Reader, echo io.Writer) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r\n")
+		if echo != nil {
+			fmt.Fprintln(echo, line)
+		}
+		if line == "" {
+			continue
+		}
+
+		select {
+		case <-hm.ctx.Done():
+			return
+		default:
+		}
+
+		msg := line
+		event := &protocol.PotEvent{
+			NodeID:    hm.nodeID,
+			PotID:     instance.ID,
+			Event:     "honeybee.pot.process_log",
+			Message:   &msg,
+			Timestamp: uint64(time.Now().Unix()),
+			Metadata: map[string]string{
+				"pot_type": instance.Type,
+				"source":   source,
+			},
+		}
+
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Warn("Event channel closed, dropping process log event")
+				}
+			}()
+			select {
+			case hm.eventChan <- event:
+			default:
+				logger.Warn("Event channel full, dropping process log event")
+			}
+		}()
+	}
+
+	if err := scanner.Err(); err != nil {
+		logger.Warnf("Failed to read %s output for pot %s: %v", source, instance.ID, err)
 	}
 }
 
