@@ -490,6 +490,7 @@ func parsePort(portStr string) (uint16, error) {
 // setupGenericPython sets up a generic Python-based honeypot
 func (hm *HoneypotManager) setupGenericPython(instance *HoneypotInstance, config map[string]string) error {
 	logger.Infof("Setting up generic Python honeypot: %s", instance.Type)
+	_ = config
 
 	// Determine Python command
 	pythonCmd := "python3"
