@@ -130,6 +130,41 @@ type NodeCommandType struct {
 	GetInstalledPots *struct{}   `json:"GetInstalledPots,omitempty"`
 }
 
+// UnmarshalJSON implements custom unmarshaling to handle null values from Rust's Unit type
+func (ct *NodeCommandType) UnmarshalJSON(data []byte) error {
+	// Use a temporary type to avoid recursion
+	type Alias NodeCommandType
+	aux := &struct {
+		*Alias
+	}{
+		Alias: (*Alias)(ct),
+	}
+
+	// First, unmarshal normally
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Now check for null values and convert them to non-nil pointers
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	// For each field that might have null value, set it to a non-nil pointer
+	if _, exists := raw["Restart"]; exists && ct.Restart == nil {
+		ct.Restart = &struct{}{}
+	}
+	if _, exists := raw["UpdateConfig"]; exists && ct.UpdateConfig == nil {
+		ct.UpdateConfig = &struct{}{}
+	}
+	if _, exists := raw["GetInstalledPots"]; exists && ct.GetInstalledPots == nil {
+		ct.GetInstalledPots = &struct{}{}
+	}
+
+	return nil
+}
+
 // InstallPot contains details for installing a honeypot
 // Matches honeybee_core/bee_message/src/node/manager_to_node.rs
 type InstallPot struct {

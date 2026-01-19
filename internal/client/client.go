@@ -351,9 +351,12 @@ func (nc *NodeClient) readMessages(errorChan chan<- error) {
 			return
 		}
 
+		logger.Infof("📥 Raw message: %s", string(line))
+
 		var envelope protocol.MessageEnvelope
 		if err := json.Unmarshal(line, &envelope); err != nil {
 			logger.Warnf("Failed to parse message: %v", err)
+			logger.Warnf("Raw bytes: %v", line)
 			continue
 		}
 
@@ -373,6 +376,8 @@ func (nc *NodeClient) handleMessage(envelope *protocol.MessageEnvelope) error {
 
 	// Handle NodeCommand with NodeCommandType
 	if cmd := envelope.Message.NodeCommand; cmd != nil {
+		cmdJSON, _ := json.Marshal(cmd)
+		logger.Infof("📦 NodeCommand parsed: %s", string(cmdJSON))
 		nc.handleNodeCommand(cmd)
 	}
 
@@ -545,9 +550,26 @@ func (nc *NodeClient) handleGetInstalledPots() {
 	}
 
 	pots := nc.honeypotMgr.ListPots()
+	logger.Infof("Found %d installed honeypots: %v", len(pots), func() []string {
+		ids := make([]string, len(pots))
+		for i, p := range pots {
+			ids[i] = p.PotID
+		}
+		return ids
+	}())
+
+	// Send each pot status
 	for _, pot := range pots {
 		nc.sendPotStatusUpdate(pot)
 	}
+
+	// Send summary event
+	potList := make([]string, len(pots))
+	for i, pot := range pots {
+		potList[i] = fmt.Sprintf("%s (%s - %s)", pot.PotID, pot.PotType, pot.Status)
+	}
+	message := fmt.Sprintf("Found %d installed honeypot(s): %s", len(pots), potList)
+	nc.sendEvent(protocol.NewAlarmEvent(message))
 }
 
 // sendPotEvent sends a pot (honeypot) event to the server as a PotLog
