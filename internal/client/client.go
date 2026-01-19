@@ -614,6 +614,8 @@ func (nc *NodeClient) sendPotEvent(event *protocol.PotEvent) error {
 	// Convert PotEvent to PotLog for MongoDB storage
 	potLog := protocol.PotEventToPotLog(event, potType)
 
+	logger.Debugf("Sending pot log to core: pot_id=%s pot_type=%s log_type=%s", potLog.PotID, potLog.PotType, potLog.LogType)
+
 	envelope := protocol.MessageEnvelope{
 		Version: constants.ProtocolVersion,
 		Message: protocol.MessageType{

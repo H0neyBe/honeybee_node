@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -1000,16 +1001,24 @@ func (hm *HoneypotManager) captureProcessOutput(instance *HoneypotInstance, sour
 		}
 
 		msg := line
+		eventName, metadata := parseCowrieLogLine(line)
+		if metadata == nil {
+			metadata = map[string]string{}
+		}
+		metadata["pot_type"] = instance.Type
+		metadata["source"] = source
+
+		if eventName == "" {
+			eventName = "honeybee.pot.process_log"
+		}
+
 		event := &protocol.PotEvent{
 			NodeID:    hm.nodeID,
 			PotID:     instance.ID,
-			Event:     "honeybee.pot.process_log",
+			Event:     eventName,
 			Message:   &msg,
 			Timestamp: uint64(time.Now().Unix()),
-			Metadata: map[string]string{
-				"pot_type": instance.Type,
-				"source":   source,
-			},
+			Metadata:  metadata,
 		}
 
 		func() {
@@ -1029,6 +1038,96 @@ func (hm *HoneypotManager) captureProcessOutput(instance *HoneypotInstance, sour
 	if err := scanner.Err(); err != nil {
 		logger.Warnf("Failed to read %s output for pot %s: %v", source, instance.ID, err)
 	}
+}
+
+var (
+	reStdLine          = regexp.MustCompile(`^([^\[]+)\s+\[([^\]]+)\]\s+(.*)$`)
+	reNewConnGeneric   = regexp.MustCompile(`New connection: ([^:]+):(\d+) \(([^:]+):(\d+)\) \[session: ([^\]]+)\]`)
+	reLoginAttemptBin  = regexp.MustCompile(`login attempt \[b'([^']+)'/b'([^']*)'\] failed`)
+	reLoginAttemptText = regexp.MustCompile(`login attempt \[([^/]+)/([^\]]+)\] failed`)
+	reAuthTrying       = regexp.MustCompile(`b'([^']+)' trying auth b'([^']+)'`)
+	reAuthFailed       = regexp.MustCompile(`b'([^']+)' failed auth b'([^']+)'`)
+	reConnLost         = regexp.MustCompile(`Connection lost after ([\d\.]+) seconds`)
+	reIPPort           = regexp.MustCompile(`\b(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})\b`)
+	reSession          = regexp.MustCompile(`session[:=]\s*([A-Za-z0-9_-]+)`)
+	reUUID             = regexp.MustCompile(`[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`)
+)
+
+func parseCowrieLogLine(line string) (string, map[string]string) {
+	match := reStdLine.FindStringSubmatch(line)
+	if match == nil {
+		return "", nil
+	}
+
+	ts := strings.TrimSpace(match[1])
+	system := strings.TrimSpace(match[2])
+	msg := strings.TrimSpace(match[3])
+
+	metadata := map[string]string{
+		"timestamp": ts,
+		"system":    system,
+	}
+
+	// Common patterns across many honeypots
+	if m := reNewConnGeneric.FindStringSubmatch(msg); m != nil {
+		metadata["src_ip"] = m[1]
+		metadata["src_port"] = m[2]
+		metadata["dst_ip"] = m[3]
+		metadata["dst_port"] = m[4]
+		metadata["session"] = m[5]
+		return "session.connect", metadata
+	}
+
+	if m := reLoginAttemptBin.FindStringSubmatch(msg); m != nil {
+		metadata["username"] = m[1]
+		metadata["password"] = m[2]
+		return "login.failed", metadata
+	}
+	if m := reLoginAttemptText.FindStringSubmatch(msg); m != nil {
+		metadata["username"] = m[1]
+		metadata["password"] = m[2]
+		return "login.failed", metadata
+	}
+
+	if m := reAuthTrying.FindStringSubmatch(msg); m != nil {
+		metadata["username"] = m[1]
+		metadata["auth"] = m[2]
+		return "login.auth_try", metadata
+	}
+	if m := reAuthFailed.FindStringSubmatch(msg); m != nil {
+		metadata["username"] = m[1]
+		metadata["auth"] = m[2]
+		return "login.auth_fail", metadata
+	}
+
+	if m := reConnLost.FindStringSubmatch(msg); m != nil {
+		metadata["duration"] = m[1]
+		return "session.closed", metadata
+	}
+
+	// Extract IP:port pairs if present
+	ipMatches := reIPPort.FindAllStringSubmatch(msg, -1)
+	if len(ipMatches) > 0 {
+		metadata["ip_port"] = ipMatches[0][0]
+		metadata["src_ip"] = ipMatches[0][1]
+		metadata["src_port"] = ipMatches[0][2]
+		if len(ipMatches) > 1 {
+			metadata["dst_ip"] = ipMatches[1][1]
+			metadata["dst_port"] = ipMatches[1][2]
+		}
+	}
+
+	// Extract session if present
+	if m := reSession.FindStringSubmatch(msg); m != nil {
+		metadata["session"] = m[1]
+	}
+
+	// Extract UUID if present
+	if m := reUUID.FindStringSubmatch(msg); m != nil {
+		metadata["uuid"] = m[0]
+	}
+
+	return "process.log", metadata
 }
 
 // findHoneypotForEvent tries to determine which honeypot an event belongs to
