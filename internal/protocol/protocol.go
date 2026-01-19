@@ -62,8 +62,9 @@ type MessageType struct {
 	NodeEvent        *NodeEvent        `json:"NodeEvent,omitempty"`
 	NodeDrop         *struct{}         `json:"NodeDrop,omitempty"` // Unit variant
 
-	// Pot status update (Node → Manager)
+	// Pot messages (Node → Manager)
 	PotStatusUpdate *PotStatusUpdate `json:"PotStatusUpdate,omitempty"`
+	PotLog          *PotLog          `json:"PotLog,omitempty"`
 
 	// Manager to Node messages (ManagerToNodeMessage enum variants)
 	NodeCommand     *NodeCommand     `json:"NodeCommand,omitempty"`
@@ -87,10 +88,23 @@ type NodeStatusUpdate struct {
 }
 
 // NodeEvent represents noteworthy events
+// Matches the Rust enum serialization: NodeEvent { Started | Stopped | Alarm | Error }
 type NodeEvent struct {
-	Type        string `json:"type"` // "Started", "Stopped", "Alarm", "Error"
-	Message     string `json:"message,omitempty"`
-	Description string `json:"description,omitempty"`
+	// Only ONE of these fields should be set to match Rust enum serialization
+	Started *struct{}          `json:"Started,omitempty"` // Unit variant
+	Stopped *struct{}          `json:"Stopped,omitempty"` // Unit variant
+	Alarm   *AlarmEvent        `json:"Alarm,omitempty"`   // Struct variant
+	Error   *ErrorEvent        `json:"Error,omitempty"`   // Struct variant
+}
+
+// AlarmEvent represents the Alarm variant payload
+type AlarmEvent struct {
+	Description string `json:"description"`
+}
+
+// ErrorEvent represents the Error variant payload
+type ErrorEvent struct {
+	Message string `json:"message"`
 }
 
 // NodeCommand instructs a node to perform an action
@@ -159,6 +173,17 @@ type PotEvent struct {
 	Message   *string           `json:"message,omitempty"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
 	Timestamp uint64            `json:"timestamp"`
+}
+
+// PotLog represents logs/events captured by the honeypot for storage
+// Matches honeybee_core/bee_message/src/node/node_to_manager.rs
+type PotLog struct {
+	NodeID    uint64                 `json:"node_id"`
+	PotID     string                 `json:"pot_id"`
+	PotType   string                 `json:"pot_type"`
+	LogType   string                 `json:"log_type"`
+	Data      map[string]interface{} `json:"data"`
+	Timestamp string                 `json:"timestamp"`
 }
 
 // =============================================================================
@@ -303,27 +328,29 @@ func UnmarshalEnvelope(data []byte) (*MessageEnvelope, error) {
 
 // NewStartedEvent creates a new "Started" node event
 func NewStartedEvent() *NodeEvent {
-	return &NodeEvent{Type: "Started"}
+	return &NodeEvent{Started: &struct{}{}}
 }
 
 // NewStoppedEvent creates a new "Stopped" node event
 func NewStoppedEvent() *NodeEvent {
-	return &NodeEvent{Type: "Stopped"}
+	return &NodeEvent{Stopped: &struct{}{}}
 }
 
 // NewAlarmEvent creates a new "Alarm" node event with a description
 func NewAlarmEvent(description string) *NodeEvent {
 	return &NodeEvent{
-		Type:        "Alarm",
-		Description: description,
+		Alarm: &AlarmEvent{
+			Description: description,
+		},
 	}
 }
 
 // NewErrorEvent creates a new "Error" node event with a message
 func NewErrorEvent(message string) *NodeEvent {
 	return &NodeEvent{
-		Type:    "Error",
-		Message: message,
+		Error: &ErrorEvent{
+			Message: message,
+		},
 	}
 }
 
@@ -371,6 +398,41 @@ func NewPotEvent(nodeID uint64, potID string, rawEvent map[string]interface{}) *
 			event.Metadata[key] = v
 		case float64:
 			event.Metadata[key] = fmt.Sprintf("%v", v)
+		case bool:
+			event.Metadata[key] = fmt.Sprintf("%v", v)
+		}
+	}
+
+	return event
+}
+
+// PotEventToPotLog converts a PotEvent to a PotLog for storage
+func PotEventToPotLog(event *PotEvent, potType string) *PotLog {
+	// Convert metadata strings to interface{} map for Data field
+	data := make(map[string]interface{})
+	for k, v := range event.Metadata {
+		data[k] = v
+	}
+	
+	// Add event ID to data
+	if event.Event != "" {
+		data["event"] = event.Event
+	}
+	
+	// Add message to data if present
+	if event.Message != nil {
+		data["message"] = *event.Message
+	}
+
+	return &PotLog{
+		NodeID:    event.NodeID,
+		PotID:     event.PotID,
+		PotType:   potType,
+		LogType:   event.Event, // Use event type as log type
+		Data:      data,
+		Timestamp: time.Unix(int64(event.Timestamp), 0).Format(time.RFC3339),
+	}
+}
 		case bool:
 			event.Metadata[key] = fmt.Sprintf("%v", v)
 		}

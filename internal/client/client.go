@@ -21,18 +21,18 @@ import (
 
 // NodeClient manages the connection to the honeybee_core manager
 type NodeClient struct {
-	cfg            *config.Config
-	nodeID         uint64
-	totpMgr        *auth.TOTPManager
-	tlsConfig      *tls.Config
-	conn           net.Conn
-	writer         *bufio.Writer
-	reader         *bufio.Reader
-	mu             sync.Mutex
-	stopChan       chan struct{}
-	doneChan       chan struct{}
-	registered     bool
-	honeypotMgr    *honeypot.HoneypotManager
+	cfg         *config.Config
+	nodeID      uint64
+	totpMgr     *auth.TOTPManager
+	tlsConfig   *tls.Config
+	conn        net.Conn
+	writer      *bufio.Writer
+	reader      *bufio.Reader
+	mu          sync.Mutex
+	stopChan    chan struct{}
+	doneChan    chan struct{}
+	registered  bool
+	honeypotMgr *honeypot.HoneypotManager
 }
 
 // NewNodeClient creates a new node client
@@ -387,11 +387,11 @@ func (nc *NodeClient) handleNodeCommand(cmd *protocol.NodeCommand) {
 
 	switch {
 	case cmdType.Restart != nil:
-			logger.Info("Restart command received")
-			nc.sendStatusUpdate(protocol.NodeStatusStopped)
-			time.Sleep(500 * time.Millisecond)
-			nc.sendStatusUpdate(protocol.NodeStatusRunning)
-			nc.sendEvent(protocol.NewStartedEvent())
+		logger.Info("Restart command received")
+		nc.sendStatusUpdate(protocol.NodeStatusStopped)
+		time.Sleep(500 * time.Millisecond)
+		nc.sendStatusUpdate(protocol.NodeStatusRunning)
+		nc.sendEvent(protocol.NewStartedEvent())
 
 	case cmdType.UpdateConfig != nil:
 		logger.Info("UpdateConfig command received")
@@ -440,7 +440,7 @@ func (nc *NodeClient) handleNodeCommand(cmd *protocol.NodeCommand) {
 		logger.Info("GetInstalledPots command")
 		nc.handleGetInstalledPots()
 
-		default:
+	default:
 		logger.Warnf("Unknown command type: %s", cmdName)
 		nc.sendEvent(protocol.NewErrorEvent(fmt.Sprintf("Unknown command: %s", cmdName)))
 	}
@@ -510,7 +510,7 @@ func (nc *NodeClient) handleRestartPot(potID string) {
 	// Stop then start
 	if err := nc.honeypotMgr.StopHoneypot(potID); err != nil {
 		logger.Warnf("Error stopping pot for restart: %v", err)
-		}
+	}
 	time.Sleep(500 * time.Millisecond)
 	if err := nc.honeypotMgr.StartHoneypot(potID); err != nil {
 		logger.Errorf("Failed to restart pot: %v", err)
@@ -550,20 +550,32 @@ func (nc *NodeClient) handleGetInstalledPots() {
 	}
 }
 
-// sendPotEvent sends a pot (honeypot) event to the server
+// sendPotEvent sends a pot (honeypot) event to the server as a PotLog
 func (nc *NodeClient) sendPotEvent(event *protocol.PotEvent) error {
-	// Convert PotEvent to PotStatusUpdate for sending via message envelope
-	// The core expects PotStatusUpdate messages for status updates
+	// Get the honeypot type from the manager
+	var potType string
+	if nc.honeypotMgr != nil {
+		if status, err := nc.honeypotMgr.GetStatus(event.PotID); err == nil {
+			potType = status.PotType
+		}
+	}
+
+	// If pot type is still unknown, try to get it from metadata
+	if potType == "" {
+		if pt, ok := event.Metadata["pot_type"]; ok {
+			potType = pt
+		} else {
+			potType = "unknown"
+		}
+	}
+
+	// Convert PotEvent to PotLog for MongoDB storage
+	potLog := protocol.PotEventToPotLog(event, potType)
+
 	envelope := protocol.MessageEnvelope{
 		Version: constants.ProtocolVersion,
 		Message: protocol.MessageType{
-			PotStatusUpdate: &protocol.PotStatusUpdate{
-				NodeID:  event.NodeID,
-				PotID:   event.PotID,
-				PotType: event.Metadata["pot_type"],
-				Status:  protocol.PotStatus(event.Metadata["status"]),
-				Message: event.Message,
-			},
+			PotLog: potLog,
 		},
 	}
 
