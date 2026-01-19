@@ -1049,10 +1049,19 @@ var (
 	reLoginAttemptText = regexp.MustCompile(`login attempt \[([^/]+)/([^\]]+)\] failed`)
 	reAuthTrying       = regexp.MustCompile(`b'([^']+)' trying auth b'([^']+)'`)
 	reAuthFailed       = regexp.MustCompile(`b'([^']+)' failed auth b'([^']+)'`)
+	reNoModuli         = regexp.MustCompile(`No moduli, no diffie-hellman-group-exchange-(sha1|sha256)`)
+	reKexAlg           = regexp.MustCompile(`kex alg=b'([^']+)' key alg=b'([^']+)'`)
+	reCryptoOut        = regexp.MustCompile(`outgoing: b'([^']+)' b'([^']+)' b'([^']+)'`)
+	reCryptoIn         = regexp.MustCompile(`incoming: b'([^']+)' b'([^']+)' b'([^']+)'`)
+	reServiceStart     = regexp.MustCompile(`starting service b'([^']+)'`)
+	reUserdbMissing    = regexp.MustCompile(`Could not read etc/userdb\.txt, default database activated`)
+	reUnauthorized     = regexp.MustCompile(`unauthorized login:`)
+	reNewKeys          = regexp.MustCompile(`\bNEW KEYS\b`)
 	reConnLost         = regexp.MustCompile(`Connection lost after ([\d\.]+) seconds`)
 	reIPPort           = regexp.MustCompile(`\b(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})\b`)
 	reSession          = regexp.MustCompile(`session[:=]\s*([A-Za-z0-9_-]+)`)
 	reUUID             = regexp.MustCompile(`[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`)
+	reSystemIP         = regexp.MustCompile(`\b(\d{1,3}(?:\.\d{1,3}){3})\b`)
 )
 
 func parseCowrieLogLine(line string) (string, map[string]string) {
@@ -1075,6 +1084,11 @@ func parseCowrieLogLine(line string) (string, map[string]string) {
 	if level := extractLevel(system); level != "" {
 		metadata["level"] = level
 	}
+	if _, ok := metadata["src_ip"]; !ok {
+		if m := reSystemIP.FindStringSubmatch(system); m != nil {
+			metadata["src_ip"] = m[1]
+		}
+	}
 
 	// Common patterns across many honeypots
 	if m := reNewConnGeneric.FindStringSubmatch(msg); m != nil {
@@ -1084,6 +1098,49 @@ func parseCowrieLogLine(line string) (string, map[string]string) {
 		metadata["dst_port"] = m[4]
 		metadata["session"] = m[5]
 		return "session.connect", metadata
+	}
+
+	if m := reNoModuli.FindStringSubmatch(msg); m != nil {
+		metadata["kex"] = "diffie-hellman-group-exchange-" + m[1]
+		metadata["protocol"] = "ssh"
+		return "ssh.kex.moduli_missing", metadata
+	}
+
+	if m := reKexAlg.FindStringSubmatch(msg); m != nil {
+		metadata["kex_alg"] = m[1]
+		metadata["key_alg"] = m[2]
+		metadata["protocol"] = "ssh"
+		return "ssh.kex", metadata
+	}
+
+	if m := reCryptoOut.FindStringSubmatch(msg); m != nil {
+		metadata["cipher_out"] = m[1]
+		metadata["mac_out"] = m[2]
+		metadata["comp_out"] = m[3]
+		metadata["protocol"] = "ssh"
+		return "ssh.crypto.outgoing", metadata
+	}
+
+	if m := reCryptoIn.FindStringSubmatch(msg); m != nil {
+		metadata["cipher_in"] = m[1]
+		metadata["mac_in"] = m[2]
+		metadata["comp_in"] = m[3]
+		metadata["protocol"] = "ssh"
+		return "ssh.crypto.incoming", metadata
+	}
+
+	if m := reServiceStart.FindStringSubmatch(msg); m != nil {
+		metadata["service"] = m[1]
+		metadata["protocol"] = "ssh"
+		return "ssh.service.start", metadata
+	}
+
+	if reUserdbMissing.MatchString(msg) {
+		return "auth.userdb.missing", metadata
+	}
+
+	if reUnauthorized.MatchString(msg) {
+		return "login.unauthorized", metadata
 	}
 
 	if m := reSSHVersion.FindStringSubmatch(msg); m != nil {
@@ -1101,23 +1158,32 @@ func parseCowrieLogLine(line string) (string, map[string]string) {
 	if m := reLoginAttemptBin.FindStringSubmatch(msg); m != nil {
 		metadata["username"] = m[1]
 		metadata["password"] = m[2]
+		metadata["protocol"] = "ssh"
 		return "login.failed", metadata
 	}
 	if m := reLoginAttemptText.FindStringSubmatch(msg); m != nil {
 		metadata["username"] = m[1]
 		metadata["password"] = m[2]
+		metadata["protocol"] = "ssh"
 		return "login.failed", metadata
 	}
 
 	if m := reAuthTrying.FindStringSubmatch(msg); m != nil {
 		metadata["username"] = m[1]
 		metadata["auth"] = m[2]
+		metadata["protocol"] = "ssh"
 		return "login.auth_try", metadata
 	}
 	if m := reAuthFailed.FindStringSubmatch(msg); m != nil {
 		metadata["username"] = m[1]
 		metadata["auth"] = m[2]
+		metadata["protocol"] = "ssh"
 		return "login.auth_fail", metadata
+	}
+
+	if reNewKeys.MatchString(msg) {
+		metadata["protocol"] = "ssh"
+		return "ssh.kex.new_keys", metadata
 	}
 
 	if m := reConnLost.FindStringSubmatch(msg); m != nil {
